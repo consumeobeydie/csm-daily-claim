@@ -1,4 +1,4 @@
-import { sdk } from 'https://esm.sh/@farcaster/frame-sdk';
+import { sdk } from 'https://esm.sh/@farcaster/miniapp-sdk@0.2.3';
 import { BrowserProvider, Contract, formatUnits } from 'https://esm.sh/ethers@6.13.4';
 
 // Replace with deployed contract addresses on Base mainnet
@@ -48,6 +48,8 @@ let tokenContract = null;
 let claimContract = null;
 let countdownTimer = null;
 let claimInfo = null;
+let sdkReadyPromise = null;
+let inMiniApp = false;
 
 function setStatus(message, type = '') {
   statusEl.textContent = message;
@@ -129,14 +131,34 @@ function getInjectedProvider() {
   return hasProviderRequest(eth) ? eth : null;
 }
 
-async function probeProvider(ethProvider) {
-  if (!hasProviderRequest(ethProvider)) return false;
-  try {
-    const chainId = await ethProvider.request({ method: 'eth_chainId' });
-    return chainId != null && chainId !== '';
-  } catch {
-    return false;
+async function ensureSdkReady() {
+  if (!sdkReadyPromise) {
+    sdkReadyPromise = (async () => {
+      await sdk.actions.ready();
+      try {
+        inMiniApp = await sdk.isInMiniApp({ timeoutMs: 3000 });
+      } catch {
+        inMiniApp = false;
+      }
+      if (!inMiniApp) {
+        try {
+          const probe = await sdk.wallet.getEthereumProvider();
+          if (hasProviderRequest(probe)) inMiniApp = true;
+        } catch {
+          // Not running in a Mini App host
+        }
+      }
+    })();
   }
+  await sdkReadyPromise;
+}
+
+async function getMiniAppProvider() {
+  const fcProvider = await sdk.wallet.getEthereumProvider();
+  if (!hasProviderRequest(fcProvider)) {
+    throw new Error('Embedded wallet is not available in this client.');
+  }
+  return fcProvider;
 }
 
 async function ensureBaseNetwork(ethProvider) {
@@ -178,26 +200,14 @@ async function ensureBaseNetwork(ethProvider) {
 }
 
 async function getEthereumProvider() {
-  await initFarcaster();
+  await ensureSdkReady();
 
-  const candidates = [];
-
-  try {
-    const getFcProvider = sdk?.wallet?.getEthereumProvider;
-    if (typeof getFcProvider === 'function') {
-      const fcProvider = await getFcProvider.call(sdk.wallet);
-      if (hasProviderRequest(fcProvider)) candidates.push(fcProvider);
-    }
-  } catch {
-    // Farcaster host wallet unavailable
+  if (inMiniApp) {
+    return getMiniAppProvider();
   }
 
   const injected = getInjectedProvider();
-  if (injected) candidates.push(injected);
-
-  for (const candidate of candidates) {
-    if (await probeProvider(candidate)) return candidate;
-  }
+  if (injected) return injected;
 
   throw new Error('No wallet found. Install MetaMask or Coinbase Wallet.');
 }
@@ -243,14 +253,18 @@ async function refreshClaimInfo() {
   updateClaimsUI();
 }
 
-async function connectWallet() {
-  setStatus('Connecting…');
+async function connectWallet({ silent = false } = {}) {
+  if (!silent) setStatus('Connecting…');
   connectBtn.disabled = true;
 
   try {
-    await initFarcaster();
+    await ensureSdkReady();
     const ethProvider = await getEthereumProvider();
-    await ensureBaseNetwork(ethProvider);
+
+    // Base App / Warpcast embedded wallet is already on Base; chain switch breaks host RPC
+    if (!inMiniApp) {
+      await ensureBaseNetwork(ethProvider);
+    }
 
     const accounts = await ethProvider.request({ method: 'eth_requestAccounts' });
     if (!accounts?.length) {
@@ -270,8 +284,7 @@ async function connectWallet() {
     walletEl.textContent = shortAddress(account);
     setStatus('Wallet connected on Base.', 'success');
   } catch (err) {
-    const msg = parseWalletError(err);
-    setStatus(msg, 'error');
+    if (!silent) setStatus(parseWalletError(err), 'error');
     connectBtn.disabled = false;
     connectBtn.textContent = 'Connect Wallet';
   }
@@ -324,16 +337,8 @@ function contractsConfigured() {
   return CONFIG.tokenAddress !== zero && CONFIG.claimAddress !== zero;
 }
 
-async function initFarcaster() {
-  try {
-    await sdk.actions.ready();
-  } catch {
-    // Running outside Farcaster client
-  }
-}
-
 async function init() {
-  await initFarcaster();
+  await ensureSdkReady();
   startCountdownLoop();
 
   if (!contractsConfigured()) {
@@ -344,10 +349,12 @@ async function init() {
   claimBtn.addEventListener('click', submitClaim);
 
   try {
-    const ethProvider = await getEthereumProvider();
-    const accounts = await ethProvider.request({ method: 'eth_accounts' });
-    if (accounts?.length) {
-      await connectWallet();
+    if (inMiniApp) {
+      await connectWallet({ silent: true });
+    } else {
+      const ethProvider = await getEthereumProvider();
+      const accounts = await ethProvider.request({ method: 'eth_accounts' });
+      if (accounts?.length) await connectWallet();
     }
   } catch {
     // User will connect manually
