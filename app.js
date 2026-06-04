@@ -51,6 +51,9 @@ let claimInfo = null;
 let sdkReadyPromise = null;
 let inMiniApp = false;
 let isConnecting = false;
+let cachedMiniAppProvider = null;
+
+const WALLET_APPROVAL_TIMEOUT_MS = 120000;
 
 function setStatus(message, type = '') {
   statusEl.textContent = message;
@@ -170,9 +173,78 @@ async function ensureSdkReady() {
           // Not running in a Mini App host
         }
       }
+      if (inMiniApp) {
+        try {
+          cachedMiniAppProvider = await getMiniAppProvider();
+        } catch {
+          cachedMiniAppProvider = null;
+        }
+      }
     })();
   }
   await sdkReadyPromise;
+}
+
+function withTimeout(promise, ms, message) {
+  return Promise.race([
+    promise,
+    new Promise((_, reject) => {
+      setTimeout(() => reject(new Error(message)), ms);
+    }),
+  ]);
+}
+
+async function requestAccountsWithApproval(ethProvider) {
+  if (!hasProviderRequest(ethProvider)) {
+    throw new Error('Wallet provider is not available.');
+  }
+
+  setStatus('Approve wallet connection in Base App…');
+
+  try {
+    await ethProvider.request({
+      method: 'wallet_requestPermissions',
+      params: [{ eth_accounts: {} }],
+    });
+  } catch {
+    // Host may not support wallet_requestPermissions; eth_requestAccounts is required next.
+  }
+
+  const accounts = await withTimeout(
+    ethProvider.request({ method: 'eth_requestAccounts' }),
+    WALLET_APPROVAL_TIMEOUT_MS,
+    'Wallet approval timed out. Tap Connect Wallet and approve the request in Base App.',
+  );
+
+  if (!Array.isArray(accounts) || accounts.length === 0) {
+    throw new Error('Wallet approval required. Approve the connection popup in Base App.');
+  }
+
+  return accounts;
+}
+
+async function requestAccountsForConnect(ethProvider) {
+  try {
+    const accounts = await requestAccountsWithApproval(ethProvider);
+    return { ethProvider, accounts };
+  } catch (primaryError) {
+    if (!inMiniApp) throw primaryError;
+    const injected = getInjectedProvider();
+    if (!injected || injected === ethProvider) throw primaryError;
+    setStatus('Approve wallet connection in Base App…');
+    const accounts = await requestAccountsWithApproval(injected);
+    return { ethProvider: injected, accounts };
+  }
+}
+
+async function getExistingAccounts(ethProvider) {
+  if (!hasProviderRequest(ethProvider)) return [];
+  try {
+    const accounts = await ethProvider.request({ method: 'eth_accounts' });
+    return Array.isArray(accounts) ? accounts : [];
+  } catch {
+    return [];
+  }
 }
 
 async function getMiniAppProvider() {
@@ -234,13 +306,28 @@ async function getEthereumProvider() {
   await ensureSdkReady();
 
   if (inMiniApp) {
-    return getMiniAppProvider();
+    if (cachedMiniAppProvider) return cachedMiniAppProvider;
+    cachedMiniAppProvider = await getMiniAppProvider();
+    return cachedMiniAppProvider;
   }
 
   const injected = getInjectedProvider();
   if (injected) return injected;
 
   throw new Error('No wallet found. Install MetaMask or Coinbase Wallet.');
+}
+
+async function completeWalletSession(ethProvider, accounts) {
+  provider = new BrowserProvider(ethProvider);
+  signer = await provider.getSigner(accounts[0]);
+  account = accounts[0];
+
+  await initContracts();
+  await Promise.all([refreshBalance(), refreshClaimInfo()]);
+
+  walletEl.hidden = false;
+  walletEl.textContent = shortAddress(account);
+  setConnectLoading(false);
 }
 
 async function initContracts() {
@@ -297,26 +384,22 @@ async function connectWallet({ silent = false } = {}) {
     await ensureSdkReady();
     const ethProvider = await getEthereumProvider();
 
-    // Base App / Warpcast embedded wallet is already on Base; chain switch breaks host RPC
     if (!inMiniApp) {
       await ensureBaseNetwork(ethProvider);
     }
 
-    const accounts = await ethProvider.request({ method: 'eth_requestAccounts' });
-    if (!accounts?.length) {
-      throw new Error('No accounts returned from wallet.');
+    let sessionProvider = ethProvider;
+    let accounts;
+    if (silent) {
+      accounts = await getExistingAccounts(ethProvider);
+      if (!accounts.length) return;
+    } else {
+      const approved = await requestAccountsForConnect(ethProvider);
+      sessionProvider = approved.ethProvider;
+      accounts = approved.accounts;
     }
 
-    provider = new BrowserProvider(ethProvider);
-    signer = await provider.getSigner();
-    account = await signer.getAddress();
-
-    await initContracts();
-    await Promise.all([refreshBalance(), refreshClaimInfo()]);
-
-    walletEl.hidden = false;
-    walletEl.textContent = shortAddress(account);
-    setConnectLoading(false);
+    await completeWalletSession(sessionProvider, accounts);
     if (!silent) setStatus('Wallet connected on Base.', 'success');
   } catch (err) {
     if (!silent) setStatus(parseWalletError(err), 'error');
@@ -329,11 +412,30 @@ async function connectWallet({ silent = false } = {}) {
 
 function handleConnectTap() {
   if (account || isConnecting) return;
+
+  isConnecting = true;
   setConnectLoading(true);
   setStatus('Connecting…');
-  void connectWallet().catch(() => {
-    if (!account) setConnectLoading(false);
-  });
+
+  void (async () => {
+    try {
+      await ensureSdkReady();
+      const ethProvider = await getEthereumProvider();
+
+      if (!inMiniApp) {
+        await ensureBaseNetwork(ethProvider);
+      }
+
+      const { ethProvider: sessionProvider, accounts } = await requestAccountsForConnect(ethProvider);
+      await completeWalletSession(sessionProvider, accounts);
+      setStatus('Wallet connected on Base.', 'success');
+    } catch (err) {
+      setStatus(parseWalletError(err), 'error');
+      if (!account) setConnectLoading(false);
+    } finally {
+      isConnecting = false;
+    }
+  })();
 }
 
 function parseWalletError(err) {
@@ -396,18 +498,13 @@ function bindUi() {
 async function autoConnect() {
   try {
     await ensureSdkReady();
-    if (inMiniApp) {
-      await connectWallet({ silent: true });
-      return;
-    }
-    const injected = getInjectedProvider();
-    if (!injected) return;
-    const accounts = await injected.request({ method: 'eth_accounts' });
-    if (accounts?.length) {
-      await connectWallet({ silent: true });
+    const ethProvider = await getEthereumProvider();
+    const accounts = await getExistingAccounts(ethProvider);
+    if (accounts.length) {
+      await completeWalletSession(ethProvider, accounts);
     }
   } catch {
-    // User can tap Connect Wallet
+    // User must tap Connect Wallet to trigger eth_requestAccounts approval
   }
 }
 
