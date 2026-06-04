@@ -112,8 +112,46 @@ function startCountdownLoop() {
   }, 1000);
 }
 
+function hasProviderRequest(ethProvider) {
+  return ethProvider != null && typeof ethProvider.request === 'function';
+}
+
+function getInjectedProvider() {
+  const eth = window.ethereum;
+  if (!eth) return null;
+  if (eth.providers?.length) {
+    return (
+      eth.providers.find((p) => p.isMetaMask && hasProviderRequest(p)) ||
+      eth.providers.find((p) => (p.isCoinbaseWallet || p.isCoinbaseBrowser) && hasProviderRequest(p)) ||
+      eth.providers.find(hasProviderRequest)
+    );
+  }
+  return hasProviderRequest(eth) ? eth : null;
+}
+
+async function probeProvider(ethProvider) {
+  if (!hasProviderRequest(ethProvider)) return false;
+  try {
+    const chainId = await ethProvider.request({ method: 'eth_chainId' });
+    return chainId != null && chainId !== '';
+  } catch {
+    return false;
+  }
+}
+
 async function ensureBaseNetwork(ethProvider) {
-  const chainIdHex = await ethProvider.request({ method: 'eth_chainId' });
+  if (!hasProviderRequest(ethProvider)) {
+    throw new Error('Wallet provider is not available.');
+  }
+
+  let chainIdHex;
+  try {
+    chainIdHex = await ethProvider.request({ method: 'eth_chainId' });
+  } catch (e) {
+    throw new Error(parseWalletError(e));
+  }
+  if (!chainIdHex) return;
+
   const current = parseInt(chainIdHex, 16);
   if (current === CONFIG.chainId) return;
 
@@ -124,25 +162,43 @@ async function ensureBaseNetwork(ethProvider) {
     });
   } catch (switchError) {
     if (switchError?.code === 4902) {
-      await ethProvider.request({
-        method: 'wallet_addEthereumChain',
-        params: [BASE_CHAIN],
-      });
-      return;
+      try {
+        await ethProvider.request({
+          method: 'wallet_addEthereumChain',
+          params: [BASE_CHAIN],
+        });
+      } catch {
+        // Some hosts return empty RPC responses for add/switch
+      }
     }
+    const recheck = await ethProvider.request({ method: 'eth_chainId' }).catch(() => null);
+    if (parseInt(recheck, 16) === CONFIG.chainId) return;
     throw switchError;
   }
 }
 
 async function getEthereumProvider() {
+  await initFarcaster();
+
+  const candidates = [];
+
   try {
-    const fcProvider = await sdk.wallet.getEthereumProvider();
-    if (fcProvider) return fcProvider;
+    const getFcProvider = sdk?.wallet?.getEthereumProvider;
+    if (typeof getFcProvider === 'function') {
+      const fcProvider = await getFcProvider.call(sdk.wallet);
+      if (hasProviderRequest(fcProvider)) candidates.push(fcProvider);
+    }
   } catch {
-    // Not inside Farcaster wallet context
+    // Farcaster host wallet unavailable
   }
 
-  if (window.ethereum) return window.ethereum;
+  const injected = getInjectedProvider();
+  if (injected) candidates.push(injected);
+
+  for (const candidate of candidates) {
+    if (await probeProvider(candidate)) return candidate;
+  }
+
   throw new Error('No wallet found. Install MetaMask or Coinbase Wallet.');
 }
 
@@ -192,6 +248,7 @@ async function connectWallet() {
   connectBtn.disabled = true;
 
   try {
+    await initFarcaster();
     const ethProvider = await getEthereumProvider();
     await ensureBaseNetwork(ethProvider);
 
@@ -221,12 +278,22 @@ async function connectWallet() {
 }
 
 function parseWalletError(err) {
-  if (!err) return 'Connection failed.';
-  if (err.code === 4001 || err.code === 'ACTION_REJECTED') {
+  if (err == null) return 'Connection failed.';
+  if (typeof err === 'string') return err;
+  const code = err.code ?? err.error?.code;
+  if (code === 4001 || code === 'ACTION_REJECTED') {
     return 'Connection rejected in wallet.';
   }
-  if (err.message?.includes('No wallet')) return err.message;
-  return err.shortMessage || err.message || 'Connection failed.';
+  const message =
+    err.shortMessage ||
+    err.message ||
+    err.reason ||
+    (typeof err.error === 'string' ? err.error : err.error?.message);
+  if (message?.includes('No wallet')) return message;
+  if (message?.includes("reading 'error'")) {
+    return 'Wallet connection failed. Try again or use MetaMask / Coinbase Wallet.';
+  }
+  return message || 'Connection failed.';
 }
 
 async function submitClaim() {
