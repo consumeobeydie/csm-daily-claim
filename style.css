@@ -154,7 +154,15 @@ body {
   border: none;
   border-radius: 12px;
   cursor: pointer;
+  touch-action: manipulation;
+  -webkit-tap-highlight-color: transparent;
+  user-select: none;
   transition: background 0.2s, transform 0.1s, box-shadow 0.2s, opacity 0.2s;
+}
+
+.btn.is-loading {
+  opacity: 0.85;
+  cursor: wait;
 }
 
 .btn:disabled {

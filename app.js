@@ -50,10 +50,32 @@ let countdownTimer = null;
 let claimInfo = null;
 let sdkReadyPromise = null;
 let inMiniApp = false;
+let isConnecting = false;
 
 function setStatus(message, type = '') {
   statusEl.textContent = message;
   statusEl.className = `status${type ? ` ${type}` : ''}`;
+}
+
+function setConnectLoading(loading) {
+  connectBtn.classList.toggle('is-loading', loading);
+  connectBtn.setAttribute('aria-busy', loading ? 'true' : 'false');
+
+  if (account) {
+    connectBtn.textContent = 'Connected';
+    connectBtn.disabled = true;
+    connectBtn.classList.remove('is-loading');
+    return;
+  }
+
+  if (loading) {
+    connectBtn.textContent = 'Connecting…';
+    connectBtn.disabled = true;
+    return;
+  }
+
+  connectBtn.textContent = 'Connect Wallet';
+  connectBtn.disabled = false;
 }
 
 function shortAddress(addr) {
@@ -154,9 +176,18 @@ async function ensureSdkReady() {
 }
 
 async function getMiniAppProvider() {
-  const fcProvider = await sdk.wallet.getEthereumProvider();
+  let fcProvider;
+  try {
+    fcProvider = await sdk.wallet.getEthereumProvider();
+  } catch (err) {
+    throw new Error(
+      `Embedded wallet unavailable: ${parseWalletError(err)}. Open this app in Base App or Warpcast.`,
+    );
+  }
   if (!hasProviderRequest(fcProvider)) {
-    throw new Error('Embedded wallet is not available in this client.');
+    throw new Error(
+      'Embedded wallet is not available in this client. Open this app in Base App or Warpcast.',
+    );
   }
   return fcProvider;
 }
@@ -254,8 +285,13 @@ async function refreshClaimInfo() {
 }
 
 async function connectWallet({ silent = false } = {}) {
-  if (!silent) setStatus('Connecting…');
-  connectBtn.disabled = true;
+  if (isConnecting) return;
+  isConnecting = true;
+
+  if (!silent) {
+    setConnectLoading(true);
+    setStatus('Connecting…');
+  }
 
   try {
     await ensureSdkReady();
@@ -278,16 +314,26 @@ async function connectWallet({ silent = false } = {}) {
     await initContracts();
     await Promise.all([refreshBalance(), refreshClaimInfo()]);
 
-    connectBtn.textContent = 'Connected';
-    connectBtn.disabled = true;
     walletEl.hidden = false;
     walletEl.textContent = shortAddress(account);
-    setStatus('Wallet connected on Base.', 'success');
+    setConnectLoading(false);
+    if (!silent) setStatus('Wallet connected on Base.', 'success');
   } catch (err) {
     if (!silent) setStatus(parseWalletError(err), 'error');
-    connectBtn.disabled = false;
-    connectBtn.textContent = 'Connect Wallet';
+    if (!account) setConnectLoading(false);
+    throw err;
+  } finally {
+    isConnecting = false;
   }
+}
+
+function handleConnectTap() {
+  if (account || isConnecting) return;
+  setConnectLoading(true);
+  setStatus('Connecting…');
+  void connectWallet().catch(() => {
+    if (!account) setConnectLoading(false);
+  });
 }
 
 function parseWalletError(err) {
@@ -337,28 +383,44 @@ function contractsConfigured() {
   return CONFIG.tokenAddress !== zero && CONFIG.claimAddress !== zero;
 }
 
-async function init() {
-  await ensureSdkReady();
+function bindUi() {
+  connectBtn.addEventListener('click', (e) => {
+    e.preventDefault();
+    handleConnectTap();
+  });
+  claimBtn.addEventListener('click', () => {
+    void submitClaim();
+  });
+}
+
+async function autoConnect() {
+  try {
+    await ensureSdkReady();
+    if (inMiniApp) {
+      await connectWallet({ silent: true });
+      return;
+    }
+    const injected = getInjectedProvider();
+    if (!injected) return;
+    const accounts = await injected.request({ method: 'eth_accounts' });
+    if (accounts?.length) {
+      await connectWallet({ silent: true });
+    }
+  } catch {
+    // User can tap Connect Wallet
+  }
+}
+
+async function bootstrap() {
+  void sdk.actions.ready().catch(() => {});
   startCountdownLoop();
 
   if (!contractsConfigured()) {
     setStatus('Set contract addresses in app.js after deploying to Base.', 'error');
   }
 
-  connectBtn.addEventListener('click', connectWallet);
-  claimBtn.addEventListener('click', submitClaim);
-
-  try {
-    if (inMiniApp) {
-      await connectWallet({ silent: true });
-    } else {
-      const ethProvider = await getEthereumProvider();
-      const accounts = await ethProvider.request({ method: 'eth_accounts' });
-      if (accounts?.length) await connectWallet();
-    }
-  } catch {
-    // User will connect manually
-  }
+  void autoConnect();
 }
 
-init();
+bindUi();
+void bootstrap();
