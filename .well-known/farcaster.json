@@ -1,5 +1,9 @@
 {
-  "accountAssociation": {},
+  "accountAssociation": {
+    "header": "eyJmaWQiOjQ0OTE0MCwidHlwZSI6ImF1dGgiLCJrZXkiOiIweDdhNUYxM2VGY0I4RDc1QTNCNEI1NUQzNmRBRTUyRTQ1N2I4ZDc1NTkifQ",
+    "payload": "eyJkb21haW4iOiJjc20tZGFpbHktY2xhaW0udmVyY2VsLmFwcCJ9",
+    "signature": "JVmQkyyUs6TksEifSjj5Z2WgOWFA/zNsS+cnZhiYJPUfYmr4obemq7sSCSxsEODNCM+L1PvBrMsdkK7yq3IOpRs="
+  },
   "miniapp": {
     "version": "1",
     "name": "CSM Daily Claim",
