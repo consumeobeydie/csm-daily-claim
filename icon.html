@@ -1,0 +1,163 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>CSM Icon Generator</title>
+  <style>
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      background: #0a0a0f;
+      color: #f0f0f5;
+      padding: 2rem;
+      max-width: 720px;
+      margin: 0 auto;
+    }
+    h1 { font-size: 1.5rem; margin-bottom: 0.5rem; }
+    p { color: #8888a0; margin-bottom: 1.5rem; }
+    .preview { margin: 1.5rem 0; }
+    canvas {
+      display: block;
+      border: 1px solid #2a2a3a;
+      border-radius: 12px;
+      margin-bottom: 1rem;
+      max-width: 100%;
+      height: auto;
+    }
+    a.download {
+      display: inline-block;
+      margin-right: 1rem;
+      margin-bottom: 0.75rem;
+      padding: 0.75rem 1.25rem;
+      background: #0052ff;
+      color: #fff;
+      text-decoration: none;
+      border-radius: 8px;
+      font-weight: 600;
+    }
+    a.download:hover { background: #1a66ff; }
+  </style>
+</head>
+<body>
+  <h1>CSM Asset Generator</h1>
+  <p>Generate PNG assets for the Farcaster manifest. Place icon.png and preview.png in the project root.</p>
+
+  <div class="preview">
+    <h2>icon.png (200×200)</h2>
+    <canvas id="icon-canvas" width="200" height="200"></canvas>
+    <a class="download" id="icon-download" download="icon.png">Download icon.png</a>
+  </div>
+
+  <div class="preview">
+    <h2>preview.png (600×400)</h2>
+    <canvas id="preview-canvas" width="600" height="400"></canvas>
+    <a class="download" id="preview-download" download="preview.png">Download preview.png</a>
+  </div>
+
+  <script>
+    function drawIcon(ctx, size) {
+      const s = size;
+      const r = s * 0.2;
+
+      const bg = ctx.createLinearGradient(0, 0, s, s);
+      bg.addColorStop(0, '#12121a');
+      bg.addColorStop(1, '#0a0a0f');
+      ctx.fillStyle = bg;
+      roundRect(ctx, 0, 0, s, s, r);
+      ctx.fill();
+
+      ctx.strokeStyle = '#0052ff';
+      ctx.lineWidth = s * 0.04;
+      roundRect(ctx, s * 0.08, s * 0.08, s * 0.84, s * 0.84, r * 0.8);
+      ctx.stroke();
+
+      ctx.fillStyle = '#0052ff';
+      ctx.font = `bold ${s * 0.32}px system-ui, sans-serif`;
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillText('CSM', s / 2, s * 0.48);
+
+      ctx.fillStyle = '#8888a0';
+      ctx.font = `${s * 0.09}px system-ui, sans-serif`;
+      ctx.fillText('DAILY', s / 2, s * 0.68);
+    }
+
+    function drawPreview(ctx, w, h) {
+      const bg = ctx.createLinearGradient(0, 0, w, h);
+      bg.addColorStop(0, '#0a0a0f');
+      bg.addColorStop(0.5, '#12121a');
+      bg.addColorStop(1, '#0a0a0f');
+      ctx.fillStyle = bg;
+      ctx.fillRect(0, 0, w, h);
+
+      ctx.strokeStyle = '#2a2a3a';
+      ctx.lineWidth = 2;
+      roundRect(ctx, 24, 24, w - 48, h - 48, 20);
+      ctx.stroke();
+
+      const iconSize = 80;
+      const ix = 48;
+      const iy = h / 2 - iconSize / 2;
+      ctx.save();
+      ctx.beginPath();
+      roundRect(ctx, ix, iy, iconSize, iconSize, 16);
+      ctx.clip();
+      drawIcon(ctx, iconSize);
+      ctx.restore();
+
+      ctx.fillStyle = '#f0f0f5';
+      ctx.font = 'bold 36px system-ui, sans-serif';
+      ctx.textAlign = 'left';
+      ctx.textBaseline = 'top';
+      ctx.fillText('CSM Daily Claim', 150, h / 2 - 50);
+
+      ctx.fillStyle = '#8888a0';
+      ctx.font = '18px system-ui, sans-serif';
+      ctx.fillText('Claim 1,000 CSM · Up to 3× per day', 150, h / 2 - 6);
+
+      ctx.fillStyle = '#0052ff';
+      ctx.font = '600 16px system-ui, sans-serif';
+      ctx.fillText('Base Mainnet', 150, h / 2 + 32);
+
+      const pillW = 140;
+      const pillH = 44;
+      const px = w - pillW - 48;
+      const py = h / 2 - pillH / 2;
+      ctx.fillStyle = '#0052ff';
+      roundRect(ctx, px, py, pillW, pillH, 12);
+      ctx.fill();
+      ctx.fillStyle = '#fff';
+      ctx.font = '600 16px system-ui, sans-serif';
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillText('Claim', px + pillW / 2, py + pillH / 2);
+    }
+
+    function roundRect(ctx, x, y, w, h, r) {
+      ctx.beginPath();
+      ctx.moveTo(x + r, y);
+      ctx.lineTo(x + w - r, y);
+      ctx.quadraticCurveTo(x + w, y, x + w, y + r);
+      ctx.lineTo(x + w, y + h - r);
+      ctx.quadraticCurveTo(x + w, y + h, x + w - r, y + h);
+      ctx.lineTo(x + r, y + h);
+      ctx.quadraticCurveTo(x, y + h, x, y + h - r);
+      ctx.lineTo(x, y + r);
+      ctx.quadraticCurveTo(x, y, x + r, y);
+      ctx.closePath();
+    }
+
+    function setupCanvas(canvasId, downloadId, drawFn) {
+      const canvas = document.getElementById(canvasId);
+      const ctx = canvas.getContext('2d');
+      drawFn(ctx, canvas.width, canvas.height);
+
+      const link = document.getElementById(downloadId);
+      link.href = canvas.toDataURL('image/png');
+    }
+
+    setupCanvas('icon-canvas', 'icon-download', (ctx, w, h) => drawIcon(ctx, w));
+    setupCanvas('preview-canvas', 'preview-download', drawPreview);
+  </script>
+</body>
+</html>

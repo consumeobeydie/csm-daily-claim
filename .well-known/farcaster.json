@@ -1,0 +1,17 @@
+{
+  "accountAssociation": {},
+  "miniapp": {
+    "version": "1",
+    "name": "CSM Daily Claim",
+    "iconUrl": "https://csm-daily-claim.vercel.app/icon.png",
+    "homeUrl": "https://csm-daily-claim.vercel.app/",
+    "imageUrl": "https://csm-daily-claim.vercel.app/preview.png",
+    "buttonTitle": "Claim CSM",
+    "splashImageUrl": "https://csm-daily-claim.vercel.app/icon.png",
+    "splashBackgroundColor": "#0a0a0f",
+    "subtitle": "Daily CSM rewards on Base",
+    "description": "Claim up to 3000 CSM per day on Base. 1000 CSM per claim, 3 claims every 24 hours.",
+    "primaryCategory": "finance",
+    "tags": ["base", "claim", "csm", "token", "daily"]
+  }
+}

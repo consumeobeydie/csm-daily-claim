@@ -1,0 +1,58 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <meta name="fc:frame" content="vNext">
+  <meta name="base:app_id" content="[LATER]">
+  <title>CSM Daily Claim</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <div class="app">
+    <header class="header">
+      <div class="logo-wrap">
+        <img src="icon.png" alt="CSM" class="logo" width="48" height="48">
+        <div>
+          <h1 class="title">CSM Daily Claim</h1>
+          <p class="subtitle">Consumeobeydie Daily Claim Token on Base</p>
+        </div>
+      </div>
+    </header>
+
+    <main class="main">
+      <section class="card balance-card">
+        <span class="label">Your balance</span>
+        <p class="balance" id="balance">—</p>
+        <span class="balance-unit">CSM</span>
+      </section>
+
+      <section class="card stats-card">
+        <div class="stat">
+          <span class="label">Claims today</span>
+          <p class="stat-value" id="claims-remaining">0/3</p>
+        </div>
+        <div class="stat">
+          <span class="label">Next reset</span>
+          <p class="stat-value countdown" id="countdown">—</p>
+        </div>
+      </section>
+
+      <section class="card claim-card">
+        <p class="claim-info">Each claim rewards <strong>1,000 CSM</strong>. Up to 3 claims per 24-hour period.</p>
+        <button type="button" class="btn btn-primary" id="claim-btn" disabled>Claim 1,000 CSM</button>
+        <p class="status" id="status" role="status" aria-live="polite"></p>
+      </section>
+
+      <button type="button" class="btn btn-secondary" id="connect-btn">Connect Wallet</button>
+      <p class="wallet-address" id="wallet-address" hidden></p>
+    </main>
+
+    <footer class="footer">
+      <p>Base Mainnet · Chain ID 8453</p>
+    </footer>
+  </div>
+
+  <script type="module" src="app.js"></script>
+</body>
+</html>
