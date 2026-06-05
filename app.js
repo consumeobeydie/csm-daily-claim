@@ -136,7 +136,9 @@ async function connectWallet() {
     const ethProvider = await getWalletProvider();
 
     // Request accounts
-    const accounts = await ethProvider.request({ method: 'eth_requestAccounts' });
+    const accounts = await ethProvider.request({ method: 'eth_accounts' }).then(a => 
+  a.length ? a : ethProvider.request({ method: 'eth_requestAccounts' })
+);
     if (!accounts || accounts.length === 0) throw new Error('No accounts found.');
 
     // Switch to Base network if needed
