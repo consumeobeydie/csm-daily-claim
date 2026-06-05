@@ -27,45 +27,31 @@ const countdownEl = $('countdown');
 const statusEl = $('status');
 const walletEl = $('wallet-address');
 
-let provider = null;
-let signer = null;
-let account = null;
-let tokenContract = null;
-let claimContract = null;
-let claimInfo = null;
-let countdownTimer = null;
+let provider, signer, account, tokenContract, claimContract, claimInfo, countdownTimer;
 
-void sdk.actions.ready().catch(() => {});
+try { sdk.actions.ready(); } catch {}
 
-function setStatus(message, type = '') {
-  statusEl.textContent = message;
-  statusEl.className = `status${type ? ` ${type}` : ''}`;
+function setStatus(msg, type = '') {
+  statusEl.textContent = msg;
+  statusEl.className = `status${type ? ' ' + type : ''}`;
 }
 
 function shortAddress(addr) {
-  return `${addr.slice(0, 6)}…${addr.slice(-4)}`;
+  return addr.slice(0, 6) + '…' + addr.slice(-4);
 }
 
-function formatBalance(raw, decimals) {
-  const num = Number(formatUnits(raw, decimals));
-  return num.toLocaleString('en-US', { maximumFractionDigits: 2 });
+function formatBalance(raw, dec) {
+  return Number(formatUnits(raw, dec)).toLocaleString('en-US', { maximumFractionDigits: 2 });
 }
 
-function formatCountdown(seconds) {
-  if (seconds <= 0) return 'Ready';
-  const h = Math.floor(seconds / 3600);
-  const m = Math.floor((seconds % 3600) / 60);
-  const s = Math.floor(seconds % 60);
-  return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`;
+function formatCountdown(sec) {
+  if (sec <= 0) return 'Ready';
+  return [Math.floor(sec/3600), Math.floor((sec%3600)/60), Math.floor(sec%60)]
+    .map(n => String(n).padStart(2,'0')).join(':');
 }
 
 function updateClaimsUI() {
-  if (!claimInfo) {
-    claimsEl.textContent = '0/3';
-    countdownEl.textContent = '—';
-    claimBtn.disabled = true;
-    return;
-  }
+  if (!claimInfo) { claimsEl.textContent = '0/3'; countdownEl.textContent = '—'; claimBtn.disabled = true; return; }
   const used = Number(claimInfo.claimsUsed);
   claimsEl.textContent = `${used}/3`;
   const now = Math.floor(Date.now() / 1000);
@@ -82,49 +68,21 @@ function updateClaimsUI() {
   }
 }
 
-function startCountdownLoop() {
-  if (countdownTimer) clearInterval(countdownTimer);
-  countdownTimer = setInterval(updateClaimsUI, 1000);
-}
-
 async function refreshBalance() {
   if (!tokenContract || !account) { balanceEl.textContent = '—'; return; }
   try {
-    const [raw, decimals] = await Promise.all([
-      tokenContract.balanceOf(account),
-      tokenContract.decimals(),
-    ]);
-    balanceEl.textContent = formatBalance(raw, decimals);
+    const [raw, dec] = await Promise.all([tokenContract.balanceOf(account), tokenContract.decimals()]);
+    balanceEl.textContent = formatBalance(raw, dec);
   } catch { balanceEl.textContent = '—'; }
 }
 
 async function refreshClaimInfo() {
   if (!claimContract || !account) { claimInfo = null; updateClaimsUI(); return; }
   try {
-    const result = await claimContract.getClaimInfo(account);
-    claimInfo = {
-      claimsUsed: result[0],
-      claimsRemaining: result[1],
-      nextResetTimestamp: result[2],
-      canClaimNow: result[3],
-    };
+    const r = await claimContract.getClaimInfo(account);
+    claimInfo = { claimsUsed: r[0], claimsRemaining: r[1], nextResetTimestamp: r[2], canClaimNow: r[3] };
   } catch { claimInfo = null; }
   updateClaimsUI();
-}
-
-async function getWalletProvider() {
-  // Try Farcaster SDK embedded wallet first
-  try {
-    const fcProvider = await sdk.wallet.getEthereumProvider();
-    if (fcProvider && typeof fcProvider.request === 'function') {
-      return fcProvider;
-    }
-  } catch { /* not in mini app */ }
-
-  // Fallback to MetaMask / Coinbase Wallet
-  if (window.ethereum) return window.ethereum;
-
-  throw new Error('No wallet found. Install MetaMask or open in Base App.');
 }
 
 async function connectWallet() {
@@ -133,24 +91,52 @@ async function connectWallet() {
   setStatus('Connecting…');
 
   try {
-    const ethProvider = await getWalletProvider();
+    let ethProvider = null;
 
-    // Base App already has accounts, no approval needed
-    let accounts = await ethProvider.request({ method: 'eth_accounts' });
-    
-    // If no accounts, try requesting
+    // 1. Try Farcaster SDK provider
+    try {
+      const fp = await Promise.race([
+        sdk.wallet.getEthereumProvider(),
+        new Promise((_, r) => setTimeout(() => r(new Error('timeout')), 3000))
+      ]);
+      if (fp && typeof fp.request === 'function') ethProvider = fp;
+    } catch {}
+
+    // 2. Fallback to window.ethereum
+    if (!ethProvider) {
+      if (window.ethereum) {
+        ethProvider = window.ethereum;
+      } else {
+        throw new Error('No wallet found. Install MetaMask or open in Base App.');
+      }
+    }
+
+    // 3. Get accounts
+    let accounts = [];
+    try { accounts = await ethProvider.request({ method: 'eth_accounts' }); } catch {}
     if (!accounts || accounts.length === 0) {
       accounts = await ethProvider.request({ method: 'eth_requestAccounts' });
     }
+    if (!accounts || accounts.length === 0) throw new Error('No accounts returned.');
 
-    if (!accounts || accounts.length === 0) {
-      throw new Error('No accounts found. Please approve wallet connection.');
-    }
+    // 4. Switch to Base if needed
+    try {
+      const chainHex = await ethProvider.request({ method: 'eth_chainId' });
+      if (parseInt(chainHex, 16) !== CONFIG.chainId) {
+        try {
+          await ethProvider.request({ method: 'wallet_switchEthereumChain', params: [{ chainId: '0x' + CONFIG.chainId.toString(16) }] });
+        } catch (e) {
+          if (e.code === 4902) {
+            await ethProvider.request({ method: 'wallet_addEthereumChain', params: [{ chainId: '0x' + CONFIG.chainId.toString(16), chainName: 'Base', nativeCurrency: { name: 'Ether', symbol: 'ETH', decimals: 18 }, rpcUrls: [CONFIG.rpcUrl], blockExplorerUrls: ['https://basescan.org'] }] });
+          }
+        }
+      }
+    } catch {}
 
+    // 5. Setup provider and contracts
     provider = new BrowserProvider(ethProvider);
     signer = await provider.getSigner(accounts[0]);
     account = accounts[0];
-
     tokenContract = new Contract(CONFIG.tokenAddress, TOKEN_ABI, signer);
     claimContract = new Contract(CONFIG.claimAddress, CLAIM_ABI, signer);
 
@@ -163,31 +149,7 @@ async function connectWallet() {
     setStatus('Wallet connected on Base.', 'success');
 
   } catch (err) {
-    const msg = err?.code === 4001 ? 'Connection rejected.' : (err.message || 'Connection failed.');
-    setStatus(msg, 'error');
-    connectBtn.textContent = 'Connect Wallet';
-    connectBtn.disabled = false;
-  }
-}
-
-    provider = new BrowserProvider(ethProvider);
-    signer = await provider.getSigner(accounts[0]);
-    account = accounts[0];
-
-    tokenContract = new Contract(CONFIG.tokenAddress, TOKEN_ABI, signer);
-    claimContract = new Contract(CONFIG.claimAddress, CLAIM_ABI, signer);
-
-    walletEl.hidden = false;
-    walletEl.textContent = shortAddress(account);
-    connectBtn.textContent = 'Connected';
-    connectBtn.disabled = true;
-
-    await Promise.all([refreshBalance(), refreshClaimInfo()]);
-    setStatus('Wallet connected on Base.', 'success');
-
-  } catch (err) {
-    const msg = err?.code === 4001 ? 'Connection rejected.' : (err.message || 'Connection failed.');
-    setStatus(msg, 'error');
+    setStatus(err?.code === 4001 ? 'Connection rejected.' : (err.message || 'Connection failed.'), 'error');
     connectBtn.textContent = 'Connect Wallet';
     connectBtn.disabled = false;
   }
@@ -209,7 +171,9 @@ async function submitClaim() {
   }
 }
 
-connectBtn.addEventListener('click', () => void connectWallet());
-claimBtn.addEventListener('click', () => void submitClaim());
+connectBtn.addEventListener('click', connectWallet);
+claimBtn.addEventListener('click', submitClaim);
 
-startCountdownLoop();
+if (countdownTimer) clearInterval(countdownTimer);
+countdownTimer = setInterval(updateClaimsUI, 1000);
+updateClaimsUI();
