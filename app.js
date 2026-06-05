@@ -135,35 +135,40 @@ async function connectWallet() {
   try {
     const ethProvider = await getWalletProvider();
 
-    // Request accounts
-    const accounts = await ethProvider.request({ method: 'eth_accounts' }).then(a => 
-  a.length ? a : ethProvider.request({ method: 'eth_requestAccounts' })
-);
-    if (!accounts || accounts.length === 0) throw new Error('No accounts found.');
-
-    // Switch to Base network if needed
-    const chainHex = await ethProvider.request({ method: 'eth_chainId' });
-    if (parseInt(chainHex, 16) !== CONFIG.chainId) {
-      try {
-        await ethProvider.request({
-          method: 'wallet_switchEthereumChain',
-          params: [{ chainId: '0x' + CONFIG.chainId.toString(16) }],
-        });
-      } catch (e) {
-        if (e.code === 4902) {
-          await ethProvider.request({
-            method: 'wallet_addEthereumChain',
-            params: [{
-              chainId: '0x' + CONFIG.chainId.toString(16),
-              chainName: 'Base',
-              nativeCurrency: { name: 'Ether', symbol: 'ETH', decimals: 18 },
-              rpcUrls: [CONFIG.rpcUrl],
-              blockExplorerUrls: ['https://basescan.org'],
-            }],
-          });
-        }
-      }
+    // Base App already has accounts, no approval needed
+    let accounts = await ethProvider.request({ method: 'eth_accounts' });
+    
+    // If no accounts, try requesting
+    if (!accounts || accounts.length === 0) {
+      accounts = await ethProvider.request({ method: 'eth_requestAccounts' });
     }
+
+    if (!accounts || accounts.length === 0) {
+      throw new Error('No accounts found. Please approve wallet connection.');
+    }
+
+    provider = new BrowserProvider(ethProvider);
+    signer = await provider.getSigner(accounts[0]);
+    account = accounts[0];
+
+    tokenContract = new Contract(CONFIG.tokenAddress, TOKEN_ABI, signer);
+    claimContract = new Contract(CONFIG.claimAddress, CLAIM_ABI, signer);
+
+    walletEl.hidden = false;
+    walletEl.textContent = shortAddress(account);
+    connectBtn.textContent = 'Connected';
+    connectBtn.disabled = true;
+
+    await Promise.all([refreshBalance(), refreshClaimInfo()]);
+    setStatus('Wallet connected on Base.', 'success');
+
+  } catch (err) {
+    const msg = err?.code === 4001 ? 'Connection rejected.' : (err.message || 'Connection failed.');
+    setStatus(msg, 'error');
+    connectBtn.textContent = 'Connect Wallet';
+    connectBtn.disabled = false;
+  }
+}
 
     provider = new BrowserProvider(ethProvider);
     signer = await provider.getSigner(accounts[0]);
